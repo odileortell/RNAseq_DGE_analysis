@@ -1,0 +1,445 @@
+---
+title: DEG_analysis"
+author: "Odile Ortell"
+date: "2 August 2022"
+output:
+  pdf_document: default
+  html_document:
+    keep_md: yes
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+if (!requireNamespace("BiocManager", quietly = TRUE))
+install.packages("BiocManager")
+
+BiocManager::install("edgeR") \# Differential Gene Expression Analysis
+in R for SA samples of TANDEM Consortium and GC6 cohort.
+
+## Differential Expression Analysis with Limma-Voom
+
+### Basic Steps of Differential Gene Expression
+
+1.  Read count data and annotation into R and preprocessing.
+2.  Calculate normalization factors (sample-specific adjustments)
+3.  Filter genes (uninteresting genes, e.g. unexpressed)
+4.  Account for expression-dependent variability by transformation,
+    weighting, or modeling (voom)
+5.  Fitting a linear model
+6.  Perform statistical comparisons of interest (using contrasts)
+7.  Adjust for multiple testing, Benjamini-Hochberg (BH) or q-value
+8.  Check results for confidence
+9.  Attach annotation if available and write tables
+
+Load the libraries required
+
+```{r load_packages, echo=FALSE, warning=FALSE, message=FALSE}
+library(edgeR)
+library(gplots)
+library(dplyr)
+library(ggplot2)
+library(reshape)
+library(ggrepel)
+library(RColorBrewer)
+library(pheatmap)
+library(BiocManager)
+library(survminer)
+library(GEOquery)
+library(limma)
+library(tidyverse)
+```
+
+## 1. Read in the counts table and create our DGEList (EdgeR)
+
+```{r read_count_data}
+setwd("/Users/odileortell/Downloads")
+counts <- read.table("rnaseq.txt")
+head(counts)
+dim(counts) # number of genes 
+```
+```{r import_GSE_phenotypic_data}
+my_id <- "GSE94438"
+gse <- getGEO(my_id)
+# analyse the dataset of the first object in the list
+gse <- gse[[1]]
+
+# save sample information
+sampleInfo <- pData(gse)
+
+# data frame of title and ids
+samples <- sampleInfo[,c(1,2,15,16)]
+
+samples <- samples %>%
+  mutate(characteristics_ch1.5 = str_remove_all(characteristics_ch1.5, "gender: "))
+samples <- samples %>%
+  mutate(characteristics_ch1.6 = str_remove_all(characteristics_ch1.6, "group: "))
+
+```
+
+```{r separate_count_data_into_groups}
+female_data <- samples[samples$characteristics_ch1.5 == 'F', ] 
+females <- female_data$geo_accession
+
+male_data <- samples[samples$characteristics_ch1.5 == 'M', ] 
+males <- male_data$geo_accession
+
+case_data <- samples[samples$characteristics_ch1.6 == 'case',]
+cases <- case_data$geo_accession
+
+control_data <- samples[samples$characteristics_ch1.6 == 'control',]
+controls <- control_data$geo_accession
+
+female_counts <- counts[,females]
+male_counts <- counts[,males]
+case_counts <- counts[,cases]
+control_counts <- counts[,controls]
+```
+Create Differential Gene Expression List Object (DGEList) object
+
+**1a.** Design my matrix
+
+1.  First need to make a design matrix in order to indicate how samples
+    are grouped
+2.  Second we need to make a DGEList
+
+```{r interaction}
+group <- factor(c(female_data$characteristics_ch1.6))
+group
+
+
+d0 <- DGEList(female_counts, group = group) # Create new object
+d0$samples #lib.size indicates the total sum of gene counts per sample
+
+# repeat for males, cases, controls
+```
+
+**1b.** Read in Annotation
+
+Annotation for the genes or genomic features
+
+```{r read_annotation}
+anno <- read.delim("/Users/odileortell/Downloads/ensembl_hg_100.tsv",as.is=T)
+dim(anno)
+head(anno)
+tail(anno)
+any(duplicated(anno$Gene.stable.ID)) # we only want unique genes
+```
+
+## 2. Filtering out lowly expessed genes
+
+A gene must be expressed at some minimal level before it is likely to be
+translated into a protein or to be biologically important. We try to
+remove genes that are either a) unexpressed, or b) unchanging
+(low-variability). Additionally, these genes with minimal counts would
+be difficult to distinguish from sequencing noise.
+
+Common filters include: 1. to remove genes with a max value (X) of less
+then Y. 2. to remove genes that are less than X normalized read counts
+(cpm(counts per million reads)) across a certain number of samples. Ex:
+rowSums(cpms \<=1) \< 3 , require at least 1 cpm in at least 3 samples
+to keep. (Choice of this parameter you can change depended on your
+experiment). A cpm of 1 corresponds to a count of 6-7 in the smallest
+samples. 3. A less used filter is for genes with minimum variance across
+all samples, so if a gene isn't changing (constant expression) its
+inherently not interesting therefor no need to test.
+
+Here we will filter low-expressed genes, remove any row (gene) whose max
+value (for the row) is less than cutoff (3). "Low-expressed" is
+subjective and depends on the dataset.
+
+```{r filter}
+cpms <- cpm(d0) ##Check out the counts per millions
+head(cpms)
+table((rowSums(head(cpms) > 1) >= 3))
+
+cutoff <- 3 ## I want my reads to be at least 3 counts per million 
+drop <- which(apply(cpm(d0), 1, max) < cutoff)
+d <- d0[-drop,]
+dim(d) # number of genes left
+head(d)
+```
+
+## 3. Calculating Normalization factors
+
+In edgeR/limma, you calculate normalization factors to scale the raw
+library sizes (number of reads) using the function calcNormFactors. The
+calcNormFactors function normalizes the library sizes by finding a set
+of scaling factors for the library sizes that minimizes the log-fold
+changes between the samples for most genes.
+
+The default method for computing these scale factors uses a trimmed mean
+of M-values (TMM) between each pair of samples. Assumes most genes are
+not DE. Proposed by Robinson and Oshlack (2010).
+
+We call the product of the original library size and the scaling factor
+the effective library size. The effective library size replaces the
+original library size in all downstream analyses.
+
+TMM is recommended for most RNA-Seq data where the majority (more than
+half) of the genes are believed not differentially expressed between any
+pair of the samples.
+
+```{r preprocess}
+d1 <- calcNormFactors(d) 
+d1$samples
+```
+
+**Note:** calcNormFactors doesn't *normalize* the data, it just
+calculates normalization factors for use downstream in the modeling
+process.
+
+The set of all normalization factors for a DGEList multiply to unity,
+ensuring that the geometric mean of the effective library sizes is the
+same as the geometric mean of the original library sizes. A
+normalization factor below one indicates that a small number of high
+count genes are monopolizing the sequencing, causing the counts for
+other genes to be lower than would be usual given the library size. As a
+result, the library size will be scaled down, analogous to scaling the
+counts upwards in that library. Conversely, a factor above one scales up
+the library size, analogous to downscaling the counts.
+
+##Visualising data
+
+Visualizing your data with a Multidimensional scaling (MDS) plot. How
+related samples are towards each other.
+
+```{r mds, fig.width=8}
+png(filename = "~/Downloads/female_MDS_Plot.png")
+plotMDS(d, col = as.numeric(d0$samples$group, main="MDS plot", cex.main = 1.2, lwd =2, cex.axis =1.2))
+legend("topright", legend = c("case", "control"), col = 1:2, pch = 15, cex =0.8)
+```
+
+The MDS plot tells you **A LOT** about what to expect from your
+experiment.
+
+-   Showcases to us the relationship between the samples - plotting
+    samples relative to each other
+-   If they cluster together, they showcase the same expression patterns
+-   You want all the replicates to cluster
+-   You want your groups to separate from each other
+-   Looks like we are going to have little expressed genes
+-   Looks like a biological outliers
+-   Compare to multiQC report to understand if the outliers were due to
+    a technical replicate or due to a biological replication
+
+**3a.** Extracting "normalized" expression table
+
+### RPKM vs. FPKM vs. CPM and Model Based
+
+-   RPKM - Reads per kilobase per million mapped reads
+-   FPKM - Fragments per kilobase per million mapped reads
+-   logCPM -- log Counts per million [ good for producing MDS plots,
+    estimate of normalized values in model based ]
+-   Model based - original read counts are not themselves transformed,
+    but rather correction factors are used in the DE model itself.
+
+We use the `cpm` function with log=TRUE to obtain log-transformed
+normalized expression data. On the log scale, the data has less
+mean-dependent variability and is more suitable for plotting.
+
+```{r}
+logcpm <- cpm(d, prior.count=2, log=TRUE)
+write.table(logcpm,"~/Downloads/rnaseq_workflow/normalized_female_counts_dg.txt",sep="\t",quote=F)
+```
+
+## 4. Voom transformation and calculation of variance weights
+
+Specify the model to be fitted. We do this before using voom since voom
+uses variances of the model residuals (observed - fitted) The function
+model.matrix() is used to make a design matrix from a factor
+
+```{r model}
+mm <- model.matrix(~0 + group) #the zero removes the intercept 
+dim(mm)
+mm
+```
+
+The above specifies a model where each coefficient corresponds to a
+group mean.
+
+**4a.** **Voom**
+
+```{r voom, fig.width=8}
+png(file="female_voom.png", res =100)
+y <- voom(d, mm, plot = T)
+
+#set plot size
+options(repr.plot.width = 8, repr.plot.height = 6)
+par(cex.main = 3, cex.lab = 0.6, cex.axis = 0.6)
+
+```
+
+What is voom doing?
+
+1.  Counts are transformed to log2 counts per million reads (CPM), where
+    "per million reads" is defined based on the normalization factors we
+    calculated earlier.
+2.  A linear model is fitted to the log2 CPM for each gene, and the
+    residuals are calculated.
+3.  A smoothed curve is fitted to the sqrt(residual standard deviation)
+    by average expression. (see red line in plot above)
+4.  The smoothed curve is used to obtain weights for each gene and
+    sample that are passed into limma along with the log2 CPMs.
+
+More details at "[voom: precision weights unlock linear model analysis
+tools for RNA-seq read
+counts](https://genomebiology.biomedcentral.com/articles/10.1186/gb-2014-15-2-r29)"
+
+## 5. Fitting linear models in limma
+
+lmFit fits a linear model using weighted least squares for each gene:
+
+```{r lmfit}
+fit <- lmFit(y, mm)
+head(coef(fit)) #Coefficients showcases the mean expression of each group for each genomic region 
+```
+
+Comparisons between groups (log fold-changes) are obtained as
+*contrasts* of these fitted linear models:
+
+## 6. Specify which groups to compare using contrasts:
+
+Comparison between groups (Between group A and D, therefore between
+TB-T2D co-morbidity and healthy controls)
+
+```{r contrasts}
+contr <- makeContrasts(groupcase-groupcontrol,levels = colnames(coef(fit))) #Comparing groups with each other 
+contr
+```
+
+**6a.** Estimate contrast for each gene
+
+```{r contast.fit}
+tmp <- contrasts.fit(fit, contr)
+```
+
+The variance characteristics of low expressed genes are different from
+high expressed genes, if treated the same, the effect is to over
+represent low expressed genes in the DE list.
+
+Empirical Bayes smoothing of standard errors (shHScoreks standard errors
+that are much larger or smaller than those from other genes towards the
+average standard error) (see "[Linear Models and Empirical Bayes Methods
+for Assessing Differential Expression in Microarray
+Experiments](https://www.degruyter.com/doi/10.2202/1544-6115.1027)"
+
+**6b.** Apply EBayes
+
+```{r ebayes}
+tmp <- eBayes(tmp)
+```
+
+## 7. Multiple Testing Adjustment
+
+The TopTable. Ajust by Benjamini & Hochberg (BH), or its 'alias' fdr.
+"[Controlling the false discovery rate: a practical and powerful
+approach to multiple testing](http://www.jstor.org/stable/2346101).
+
+here `n=Inf` says to produce the topTable for **all** genes.
+
+```{r toptable}
+top.table <- topTable(tmp, adjust.method = "BH", sort.by = "P", n = Inf)
+```
+
+### Multiple Testing Correction
+
+\Simply a must! Best choices are: \*
+[FDR](http://www.jstor.org/stable/2346101) (false discovery rate), such
+as Benjamini-Hochberg (1995). \*
+[Qvalue](https://rss.onlinelibrary.wiley.com/doi/abs/10.1111/1467-9868.00346) -
+Storey (2002)
+
+The FDR (or q-value) is a statement about the list and is no longer about
+the gene (p-value). So a FDR of 0.05, says you expect 5% false positives
+among the list of genes with an FDR of 0.05 or less. Therefore
+controlling the number of false positives in our list.
+
+The statement "Statistically significantly different" means FDR of 0.05
+or less.
+
+**7a.** How many DE genes are there (false discovery rate corrected)?
+
+```{r count_de}
+length(which(top.table$adj.P.Val < 0.05))
+
+## 8. Check your results for confidence.
+
+```
+
+You've conducted an experiment, you've seen a phenotype. Now check which
+genes are most differentially expressed (show the top 30)? Look up these
+top genes, their description and ensure they relate to your
+experiment.
+
+```{r de_genes_top10}
+head(top.table, 10)
+```
+
+Columns are \* logFC: log2 fold change of TB-T2D/Healthy controls \*
+AveExpr: Average expression across all samples, in log2 CPM \* t: logFC
+divided by its standard error \* P.Value: Raw p-value (based on t) from
+test that logFC differs from 0 \* adj.P.Val: Benjamini-Hochberg false
+discovery rate adjusted p-value \* B: log-odds that gene is DE (arguably
+less useful than the other columns)
+
+## 9. Write top.table to a file, adding in cpms and annotation
+
+```{r}
+top.table$Gene <- rownames(top.table)
+top.table <- top.table[,c("Gene", names(top.table)[1:6])]
+
+top.table <- data.frame(top.table,anno[match(top.table$Gene,anno$Gene.stable.ID.version),],logcpm[match(top.table$Gene,rownames(logcpm)),])
+
+head(top.table)
+write.table(top.table, file = "~/Documents/RNA_seq_analysis/female_toptale.txt", row.names = F, sep = "\t", quote = F)
+```
+
+##Plotting figures
+
+```{r}
+contrast.matrix <- makeContrasts(groupcase, groupcontrol, levels=colnames(coef(fit)))
+fit1 <- contrasts.fit(fit, contrast.matrix)
+fit2 <- eBayes(fit1)
+top.table <- topTable(fit2, coef = 1, sort.by = "P", n = 20)
+head(top.table)
+```
+
+## Volcano plots
+
+### Females\Males
+
+```{r}
+
+png(file="female_volc.png", width = 1000, height = 800)
+volcanoplot(fit2, coef=1, highlight=8, names=anno[match(rownames(fit2), anno$Gene.stable.ID.version), "Gene.name"], cex.main = 1, cex.lab = 1.5, cex.axis =1.5, cex.sub = 2)
+
+```
+
+## Heatmap good to show the genes pattens in a certain gene ontology or pathway you want to specify
+
+```{r fig.height=8}
+#set the number of top genes for the heatmap
+top_genes <- rownames(top.table)[1:30]
+
+# filter the logcpm matrix and annotation data for the top genes
+logcpm_top <- logcpm[top_genes, ]
+anno_top <- anno[match(top_genes, anno$Gene.stable.ID.version),]
+
+# using a red and blue colour scheme without traces and scaling each row 
+# modify font size, thickness, and size of the plot
+png(file="female_heat.png", width = 1600, height = 800)
+
+heatmap.2(logcpm_top, col=brewer.pal(11,"RdBu"), scale="row", trace="none", labRow = anno_top$Gene.name, cexRow = 0.9, cexCol = 1, lwid = c(1,4), keysize = 0.8, lmat = rbind(c(4,3),c(2,1)), lhei=c(1,3))
+
+```
+
+## 2 factor venn diagram overlap between the tests - best for interaction term - good to show which of genes are shared between two different genotypes
+
+```{r fig.width=4, fig.height=4}
+results <- decideTests(fit2)
+
+# set plot and font size
+options(repr.plot.width = 10, repr.plot.height = 10)
+vennDiagram(results, cex = 1.5)
+```
