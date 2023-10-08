@@ -8,6 +8,7 @@ This repository contains the code and data for differential gene expression anal
 The GC6-74 RNA-seq dataset used in this analysis is available from the NCBI Gene Expression Omnibus (GEO) under accession number GSE94438.
 
 **Methods**
+
 I wrote bash scripts for quality control, trimming, indexing and alignment of reads to the reference genome. The differential gene expression analysis was performed using R code.
 
 1. **Quality control:** FastQC was used to assess the quality of the RNA-seq reads.
