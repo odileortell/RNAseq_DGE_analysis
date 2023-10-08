@@ -10,11 +10,11 @@ The GC6-74 RNA-seq dataset used in this analysis is available from the NCBI Gene
 **Methods**
 I wrote bash scripts for quality control, trimming, indexing and alignment of reads to the reference genome. The differential gene expression analysis was performed using R code.
 
-**Quality control:** FastQC was used to assess the quality of the RNA-seq reads.
-**Trimming:** Adapters were trimmed using trimmomatic (ver.0.36), java (ver.17.0.2) or HTStream (ver.1.3.1).
-**Indexing and alignment:** The RNA-seq reads were aligned to the GENCODE human primary genome (release 43) using STAR (ver.2.7.7).
-**Count matrix generation:** The number of reads mapping to each gene was counted.
-**Differential gene expression analysis:** The edgeR and limma R package was used to perform differential gene expression analysis between male and female TB patients in R (ver.4.2.1).
+1. **Quality control:** FastQC was used to assess the quality of the RNA-seq reads.
+2. **Trimming:** Adapters were trimmed using trimmomatic (ver.0.36), java (ver.17.0.2) or HTStream (ver.1.3.1).
+3. **Indexing and alignment:** The RNA-seq reads were aligned to the GENCODE human primary genome (release 43) using STAR (ver.2.7.7).
+4. **Count matrix generation:** The number of reads mapping to each gene was counted.
+5. **Differential gene expression analysis:** The edgeR and limma R package was used to perform differential gene expression analysis between male and female TB patients in R (ver.4.2.1).
 
 **Usage**
 
