@@ -1,5 +1,5 @@
-# Differential gene expression analysis of RNA-seq data on sex biased gene expression and TB susceptibility
-This repository contains the code and data for differential gene expression analysis of RNA-seq data investigating the role of sex biased gene expression on TB susceptibility.
+# Differential gene expression analysis of RNA-seq data
+This repository contains the code and data for differential gene expression analysis of RNA-seq data.
 
 **README.md**
 
