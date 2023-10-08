@@ -37,5 +37,5 @@ Once you have installed the required software, you can follow these steps:
 
 **Output**
 
-The output of the differential gene expression analysis includes a table of differentially expressed genes, an MDS plot,a volcano plot, venn diagram, and a heatmap.
+The output of the differential gene expression analysis includes a table of differentially expressed genes, an MDS plot, a volcano plot, venn diagram, and a heatmap.
 
